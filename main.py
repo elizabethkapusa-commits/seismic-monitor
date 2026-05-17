@@ -1,27 +1,41 @@
 import time
 from collections import deque
 
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
 import csv
 import os
+
+import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+
+from config import (
+    SAMPLE_RATE,
+    WINDOW_SECONDS,
+    EVENT_THRESHOLD,
+    GRAPH_TITLE,
+    LINE_COLOR,
+    BACKGROUND_COLOR,
+    ENABLE_FILTER,
+    FILTER_WINDOW,
+    EVENT_COOLDOWN_SECONDS
+)
+
+from data_source import read_seismic_sample
 
 
 # Base settings
 
-SAMPLE_RATE = 100          # samples per second
-WINDOW_SECONDS = 10        # show last 10 seconds
 MAX_POINTS = SAMPLE_RATE * WINDOW_SECONDS
-EVENT_THRESHOLD = 2.0      # event detection threshold
 
 times = deque(maxlen=MAX_POINTS)
-signals = deque(maxlen=MAX_POINTS)
+raw_signals = deque(maxlen=MAX_POINTS)
+filtered_signals = deque(maxlen=MAX_POINTS)
 event_times = deque(maxlen=20)
 
 start_time = time.time()
 event_count = 0
 last_event_time = None
+last_detected_event_time = -999
+event_marker_lines = []
 
 
 # Create data folders and CSV log files
@@ -34,7 +48,8 @@ csv_writer = csv.writer(csv_file)
 
 csv_writer.writerow([
     "time_seconds",
-    "amplitude",
+    "raw_amplitude",
+    "filtered_amplitude",
     "status"
 ])
 
@@ -49,22 +64,20 @@ event_writer.writerow([
 ])
 
 
-# Simulated seismic signal
-# Later we will replace this by ADC readings
+# Digital filtering
+# This smooths noisy signal values
 
-def read_seismic_sample(t):
-    normal_vibration = 0.4 * np.sin(2 * np.pi * 1.2 * t)
-    low_frequency_motion = 0.8 * np.sin(2 * np.pi * 0.25 * t)
-    noise = np.random.normal(0, 0.15)
+def apply_filter():
 
-    # Simulated seismic event spike sometimes
+    if not ENABLE_FILTER:
+        return raw_signals[-1]
 
-    event = 0
+    if len(raw_signals) < FILTER_WINDOW:
+        return raw_signals[-1]
 
-    if np.random.random() < 0.015:
-        event = np.random.choice([-1, 1]) * np.random.uniform(1.5, 3.0)
+    recent_values = list(raw_signals)[-FILTER_WINDOW:]
 
-    return normal_vibration + low_frequency_motion + noise + event
+    return sum(recent_values) / len(recent_values)
 
 
 # Create waveform
@@ -73,9 +86,12 @@ fig, ax = plt.subplots(figsize=(10, 5))
 
 fig.canvas.manager.set_window_title("Live Seismic Monitoring Dashboard")
 
-line, = ax.plot([], [], color="black", linewidth=1.5)
+fig.patch.set_facecolor(BACKGROUND_COLOR)
+ax.set_facecolor(BACKGROUND_COLOR)
 
-ax.set_title("Real-Time Seismic Waveform")
+line, = ax.plot([], [], color=LINE_COLOR, linewidth=1.5)
+
+ax.set_title(GRAPH_TITLE)
 ax.set_xlabel("Time (seconds)")
 ax.set_ylabel("Amplitude")
 ax.set_ylim(-4, 4)
@@ -90,22 +106,56 @@ status_text = ax.text(
 )
 
 
+# Clean event markers
+
+def update_event_markers(current_time):
+
+    global event_marker_lines
+
+    for marker in event_marker_lines:
+        marker.remove()
+
+    event_marker_lines = []
+
+    for event_time in list(event_times):
+
+        if event_time >= current_time - WINDOW_SECONDS:
+
+            marker = ax.axvline(
+                x=event_time,
+                color="red",
+                linestyle="--",
+                alpha=0.4
+            )
+
+            event_marker_lines.append(marker)
+
+
 # Animation update
 
 def update(frame):
 
     global event_count
     global last_event_time
+    global last_detected_event_time
 
     current_time = time.time() - start_time
 
-    sample = read_seismic_sample(current_time)
+    raw_sample = read_seismic_sample(current_time)
+
+    raw_signals.append(raw_sample)
+
+    filtered_sample = apply_filter()
+
+    filtered_signals.append(filtered_sample)
+
+    times.append(current_time)
 
     # Event detection
 
     status = (
         "EVENT DETECTED"
-        if abs(sample) > EVENT_THRESHOLD
+        if abs(filtered_sample) > EVENT_THRESHOLD
         else "Normal monitoring"
     )
 
@@ -113,44 +163,48 @@ def update(frame):
 
     csv_writer.writerow([
         round(current_time, 4),
-        round(sample, 6),
+        round(raw_sample, 6),
+        round(filtered_sample, 6),
         status
     ])
 
     csv_file.flush()
 
-    # Store live data
-
-    times.append(current_time)
-    signals.append(sample)
-
-    # Event actions
-
     if status == "EVENT DETECTED":
 
-        event_count += 1
-        last_event_time = current_time
-        event_times.append(current_time)
+        time_since_last_event = (
+            current_time - last_detected_event_time
+        )
 
-        event_writer.writerow([
-            event_count,
-            round(current_time, 4),
-            round(sample, 6),
-            status
-        ])
+        if time_since_last_event >= EVENT_COOLDOWN_SECONDS:
 
-        event_file.flush()
+            event_count += 1
 
-        # Save event screenshot
+            last_event_time = current_time
+            last_detected_event_time = current_time
 
-        event_image_path = f"events/event_{event_count}.png"
-        fig.savefig(event_image_path)
+            event_times.append(current_time)
+
+            event_writer.writerow([
+                event_count,
+                round(current_time, 4),
+                round(filtered_sample, 6),
+                status
+            ])
+
+            event_file.flush()
+
+            event_image_path = (
+                f"events/event_{event_count}.png"
+            )
+
+            fig.savefig(event_image_path)
 
     # Update waveform
 
     if len(times) > 1:
 
-        line.set_data(times, signals)
+        line.set_data(list(times), list(filtered_signals))
 
         ax.set_xlim(
             max(0, current_time - WINDOW_SECONDS),
@@ -162,27 +216,23 @@ def update(frame):
     if status == "EVENT DETECTED":
         line.set_color("red")
     else:
-        line.set_color("black")
+        line.set_color(LINE_COLOR)
 
-    # Add event markers
+    # Update clean event markers
 
-    for event_time in list(event_times):
-
-        if event_time >= current_time - WINDOW_SECONDS:
-
-            ax.axvline(
-                x=event_time,
-                color="red",
-                linestyle="--",
-                alpha=0.4
-            )
+    update_event_markers(current_time)
 
     # Calculate rolling statistics
 
-    max_amplitude = max(abs(value) for value in signals) if signals else 0
+    max_amplitude = (
+        max(abs(value) for value in filtered_signals)
+        if filtered_signals
+        else 0
+    )
+
     average_amplitude = (
-        sum(abs(value) for value in signals) / len(signals)
-        if signals
+        sum(abs(value) for value in filtered_signals) / len(filtered_signals)
+        if filtered_signals
         else 0
     )
 
@@ -197,11 +247,13 @@ def update(frame):
     status_text.set_text(
         f"Status: {status}\n"
         f"Sample Rate: {SAMPLE_RATE} Hz\n"
+        f"Window: {WINDOW_SECONDS} s\n"
         f"Threshold: {EVENT_THRESHOLD}\n"
-        f"Latest Amplitude: {sample:.3f}\n"
+        f"Filter Enabled: {ENABLE_FILTER}\n"
+        f"Latest Amplitude: {filtered_sample:.3f}\n"
         f"Max Amplitude: {max_amplitude:.3f}\n"
         f"Average Amplitude: {average_amplitude:.3f}\n"
-        f"Samples Collected: {len(signals)}\n"
+        f"Samples Collected: {len(filtered_signals)}\n"
         f"Events Detected: {event_count}\n"
         f"Last Event Time: {last_event_display}"
     )
