@@ -7,8 +7,36 @@ from config import (
     LOW_FREQUENCY_MOTION,
     EVENT_PROBABILITY,
     EVENT_MIN_MAGNITUDE,
-    EVENT_MAX_MAGNITUDE
+    EVENT_MAX_MAGNITUDE,
+    ADC_REFERENCE_VOLTAGE,
+    ADC_RESOLUTION_BITS,
+    SENSOR_GAIN,
+    AMPLIFIER_GAIN,
+    SIGNAL_OFFSET
 )
+
+
+# Convert raw ADC value to voltage
+
+def convert_adc_to_voltage(raw_adc_value):
+    max_adc_value = (2 ** ADC_RESOLUTION_BITS) - 1
+
+    voltage = (
+        raw_adc_value / max_adc_value
+    ) * ADC_REFERENCE_VOLTAGE
+
+    return voltage
+
+
+# Apply calibration to voltage signal
+
+def apply_calibration(voltage):
+    calibrated_signal = (
+        (voltage - SIGNAL_OFFSET)
+        / (SENSOR_GAIN * AMPLIFIER_GAIN)
+    )
+
+    return calibrated_signal
 
 
 # Simulated seismic signal
@@ -31,16 +59,21 @@ def read_simulated_sample(t):
 
 
 # ADC placeholder
-# We will update this when we know the real ADC board
+# This prepares the software for real ADC readings later
 
 def read_adc_sample(t):
-    raise NotImplementedError(
-        "Real ADC input is not connected yet. "
-        "Set USE_REAL_ADC = False in config.py."
-    )
+    raw_adc_value = 0
+
+    voltage = convert_adc_to_voltage(raw_adc_value)
+
+    calibrated_signal = apply_calibration(voltage)
+
+    return calibrated_signal
 
 
 # Main sample reader
+# If USE_REAL_ADC is False, simulation is used
+# If USE_REAL_ADC is True, ADC placeholder is used
 
 def read_seismic_sample(t):
     if USE_REAL_ADC:
