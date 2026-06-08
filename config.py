@@ -26,7 +26,7 @@ BACKGROUND_COLOR = "white"
 # Filtering settings
 
 ENABLE_FILTER = True
-FILTER_WINDOW = 5
+FILTER_WINDOW = 3
 
 # ADC settings
 
@@ -41,3 +41,25 @@ ADC_RESOLUTION_BITS = 16
 SENSOR_GAIN = 1.0
 AMPLIFIER_GAIN = 1.0
 SIGNAL_OFFSET = 0.0
+
+# Frequency analysis settings
+
+ENABLE_FFT = True
+FFT_MIN_POINTS = 64
+FFT_UPDATE_INTERVAL = 10
+
+# Station settings
+
+STATION_ID = "DION_001"
+DATA_FOLDER = "data"
+LOG_FILE_SECONDS = 60
+USE_UTC_TIME = True
+STATION_LOCATION = "DION 310"
+DATA_SOURCE_NAME = "SIMULATED"
+USE_GPS_TIME = False
+METADATA_FILENAME = "station_metadata.json"
+
+# Upload settings
+
+ONEDRIVE_UPLOAD_FOLDER = "onedrive_uploads"
+ENABLE_UPLOAD_SIMULATION = True

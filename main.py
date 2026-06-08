@@ -1,11 +1,12 @@
 import time
 from collections import deque
-
 import csv
 import os
 
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from scipy.fft import rfft, rfftfreq
 
 from config import (
     SAMPLE_RATE,
@@ -16,7 +17,10 @@ from config import (
     BACKGROUND_COLOR,
     ENABLE_FILTER,
     FILTER_WINDOW,
-    EVENT_COOLDOWN_SECONDS
+    EVENT_COOLDOWN_SECONDS,
+    ENABLE_FFT,
+    FFT_MIN_POINTS,
+    FFT_UPDATE_INTERVAL
 )
 
 from data_source import read_seismic_sample
@@ -65,10 +69,8 @@ event_writer.writerow([
 
 
 # Digital filtering
-# This smooths noisy signal values
 
 def apply_filter():
-
     if not ENABLE_FILTER:
         return raw_signals[-1]
 
@@ -80,28 +82,39 @@ def apply_filter():
     return sum(recent_values) / len(recent_values)
 
 
-# Create waveform
+# Create dashboard
 
-fig, ax = plt.subplots(figsize=(10, 5))
+fig, (ax_wave, ax_fft) = plt.subplots(
+    2,
+    1,
+    figsize=(14, 10)
+)
 
 fig.canvas.manager.set_window_title("Live Seismic Monitoring Dashboard")
 
 fig.patch.set_facecolor(BACKGROUND_COLOR)
-ax.set_facecolor(BACKGROUND_COLOR)
+ax_wave.set_facecolor(BACKGROUND_COLOR)
+ax_fft.set_facecolor(BACKGROUND_COLOR)
 
-line, = ax.plot([], [], color=LINE_COLOR, linewidth=1.5)
+wave_line, = ax_wave.plot([], [], color=LINE_COLOR, linewidth=1.5)
+fft_line, = ax_fft.plot([], [], color="orange", linewidth=1.5)
 
-ax.set_title(GRAPH_TITLE)
-ax.set_xlabel("Time (seconds)")
-ax.set_ylabel("Amplitude")
-ax.set_ylim(-4, 4)
-ax.grid(True)
+ax_wave.set_title(GRAPH_TITLE)
+ax_wave.set_xlabel("Time (seconds)")
+ax_wave.set_ylabel("Amplitude")
+ax_wave.set_ylim(-4, 4)
+ax_wave.grid(True)
 
-status_text = ax.text(
+ax_fft.set_title("Frequency Spectrum")
+ax_fft.set_xlabel("Frequency (Hz)")
+ax_fft.set_ylabel("Magnitude")
+ax_fft.grid(True)
+
+status_text = ax_wave.text(
     0.02,
     0.95,
     "",
-    transform=ax.transAxes,
+    transform=ax_wave.transAxes,
     verticalalignment="top"
 )
 
@@ -109,7 +122,6 @@ status_text = ax.text(
 # Clean event markers
 
 def update_event_markers(current_time):
-
     global event_marker_lines
 
     for marker in event_marker_lines:
@@ -118,10 +130,8 @@ def update_event_markers(current_time):
     event_marker_lines = []
 
     for event_time in list(event_times):
-
         if event_time >= current_time - WINDOW_SECONDS:
-
-            marker = ax.axvline(
+            marker = ax_wave.axvline(
                 x=event_time,
                 color="red",
                 linestyle="--",
@@ -130,6 +140,32 @@ def update_event_markers(current_time):
 
             event_marker_lines.append(marker)
 
+
+# Update FFT plot
+
+def update_fft_plot():
+    if not ENABLE_FFT:
+        return
+
+    if len(filtered_signals) < FFT_MIN_POINTS:
+        return
+
+    signal_array = np.array(filtered_signals)
+    signal_array = signal_array - np.mean(signal_array)
+
+    fft_values = np.abs(rfft(signal_array))
+
+    fft_frequencies = rfftfreq(
+        len(signal_array),
+        d=1 / SAMPLE_RATE
+    )
+
+    fft_line.set_data(fft_frequencies, fft_values)
+
+    ax_fft.set_xlim(0, SAMPLE_RATE / 2)
+
+    if len(fft_values) > 0:
+        ax_fft.set_ylim(0, max(fft_values) * 1.2)
 
 # Animation update
 
@@ -146,6 +182,10 @@ def update(frame):
     raw_signals.append(raw_sample)
 
     filtered_sample = apply_filter()
+
+    # Prevent invalid filtered values
+    if np.isnan(filtered_sample):
+        filtered_sample = raw_sample
 
     filtered_signals.append(filtered_sample)
 
@@ -169,6 +209,8 @@ def update(frame):
     ])
 
     csv_file.flush()
+
+    # Event actions with cooldown
 
     if status == "EVENT DETECTED":
 
@@ -194,9 +236,7 @@ def update(frame):
 
             event_file.flush()
 
-            event_image_path = (
-                f"events/event_{event_count}.png"
-            )
+            event_image_path = f"events/event_{event_count}.png"
 
             fig.savefig(event_image_path)
 
@@ -204,9 +244,12 @@ def update(frame):
 
     if len(times) > 1:
 
-        line.set_data(list(times), list(filtered_signals))
+        wave_line.set_data(
+            list(times),
+            list(filtered_signals)
+        )
 
-        ax.set_xlim(
+        ax_wave.set_xlim(
             max(0, current_time - WINDOW_SECONDS),
             current_time
         )
@@ -214,13 +257,16 @@ def update(frame):
     # Change waveform color during events
 
     if status == "EVENT DETECTED":
-        line.set_color("red")
+        wave_line.set_color("red")
     else:
-        line.set_color(LINE_COLOR)
+        wave_line.set_color(LINE_COLOR)
 
-    # Update clean event markers
+    # Update event markers and FFT
 
     update_event_markers(current_time)
+
+    if frame % FFT_UPDATE_INTERVAL == 0:
+        update_fft_plot()
 
     # Calculate rolling statistics
 
@@ -250,6 +296,7 @@ def update(frame):
         f"Window: {WINDOW_SECONDS} s\n"
         f"Threshold: {EVENT_THRESHOLD}\n"
         f"Filter Enabled: {ENABLE_FILTER}\n"
+        f"FFT Enabled: {ENABLE_FFT}\n"
         f"Latest Amplitude: {filtered_sample:.3f}\n"
         f"Max Amplitude: {max_amplitude:.3f}\n"
         f"Average Amplitude: {average_amplitude:.3f}\n"
@@ -258,8 +305,7 @@ def update(frame):
         f"Last Event Time: {last_event_display}"
     )
 
-    return line, status_text
-
+    return wave_line, fft_line, status_text
 
 # Create animation
 
