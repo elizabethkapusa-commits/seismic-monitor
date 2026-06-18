@@ -1,5 +1,19 @@
-.venv/
+# Python
 __pycache__/
 *.pyc
+
+# Virtual environment
+.venv/
+
+# Generated data
 data/
 events/
+onedrive_uploads/
+
+# Plots
+*.png
+
+# Seismic files
+*.csv
+*.mseed
+*.miniseed
