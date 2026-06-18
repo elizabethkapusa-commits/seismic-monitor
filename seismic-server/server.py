@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 app = Flask(__name__)
 
 UPLOAD_FOLDER = "data"
+ALLOWED_EXTENSIONS = (".csv", ".mseed", ".miniseed")
 
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
@@ -19,9 +20,20 @@ def get_station_id_from_filename(filename):
 
     return "UNKNOWN_STATION"
 
-def get_file_stats(filename):
+def is_allowed_file(filename):
+    return filename.lower().endswith(ALLOWED_EXTENSIONS)
 
-    filepath = os.path.join(UPLOAD_FOLDER, filename)
+def get_file_stats(station_id, filename):
+
+    filepath = os.path.join(UPLOAD_FOLDER, station_id, filename)
+
+    if filename.lower().endswith((".mseed", ".miniseed")):
+        return {
+            "sample_count": "MiniSEED file",
+            "last_timestamp": "Use ObsPy/MATLAB",
+            "last_value": "N/A",
+            "last_status": "Archived"
+        }
 
     sample_count = 0
     last_timestamp = "N/A"
@@ -66,6 +78,9 @@ def upload_file():
 
     file = request.files["file"]
 
+    if not is_allowed_file(file.filename):
+        return "Unsupported file type", 400
+
     station_id = get_station_id_from_filename(file.filename)
 
     station_folder = os.path.join(
@@ -101,50 +116,44 @@ def list_files():
     return html
 
 
-@app.route("/files/<filename>")
-def view_file(filename):
-    return send_from_directory(UPLOAD_FOLDER, filename)
+@app.route("/files/<station_id>/<filename>")
+def view_file(station_id, filename):
+    station_folder = os.path.join(UPLOAD_FOLDER, station_id)
+    return send_from_directory(station_folder, filename)
 
 @app.route("/dashboard")
 def dashboard():
 
-    files = os.listdir(UPLOAD_FOLDER)
-
-    station_summary = {}
-
-    for file in files:
-        if not file.endswith(".csv"):
-            continue
-
-        station_id = file.split("_2026")[0]
-
-        if station_id not in station_summary:
-            station_summary[station_id] = {
-                "count": 0,
-                "latest_file": file
-            }
-
-        station_summary[station_id]["count"] += 1
-
-        if file > station_summary[station_id]["latest_file"]:
-            station_summary[station_id]["latest_file"] = file
-
     html = "<h1>Seismic Monitoring Dashboard</h1>"
 
-    for station_id, info in station_summary.items():
-        latest_file = info["latest_file"]
-        stats = get_file_stats(latest_file)
+    for station_id in sorted(os.listdir(UPLOAD_FOLDER)):
+
+        station_path = os.path.join(UPLOAD_FOLDER, station_id)
+
+        if not os.path.isdir(station_path):
+            continue
+
+        files = [
+            file for file in os.listdir(station_path)
+            if is_allowed_file(file)
+        ]
+
+        if not files:
+            continue
+
+        files.sort(reverse=True)
+
+        latest_file = files[0]
+        stats = get_file_stats(station_id, latest_file)
 
         html += f"""
         <h2>{station_id}</h2>
 
         <p><strong>Total Files:</strong>
-        <a href="/station/{station_id}">{info["count"]}</a></p>
+        <a href="/station/{station_id}">{len(files)}</a></p>
 
         <p><strong>Latest File:</strong>
-        <a href="/files/{latest_file}">{latest_file}</a></p>
-
-        <p><a href="/station/{station_id}/plot">View Latest Waveform</a></p>
+        <a href="/files/{station_id}/{latest_file}">{latest_file}</a></p>
 
         <p><strong>Latest Sample Count:</strong> {stats["sample_count"]}</p>
         <p><strong>Last Update Time:</strong> {stats["last_timestamp"]}</p>
@@ -159,21 +168,24 @@ def dashboard():
 @app.route("/station/<station_id>")
 def station_files(station_id):
 
-    files = []
+    station_folder = os.path.join(UPLOAD_FOLDER, station_id)
 
-    for file in os.listdir(UPLOAD_FOLDER):
-        if file.startswith(station_id):
-            files.append(file)
+    if not os.path.exists(station_folder):
+        return f"No files found for {station_id}"
+
+    files = [
+        file for file in os.listdir(station_folder)
+        if is_allowed_file(file)
+    ]
 
     files.sort(reverse=True)
 
     html = f"<h1>{station_id} Files</h1><ul>"
 
     for file in files:
-        html += f'<li><a href="/files/{file}">{file}</a></li>'
+        html += f'<li><a href="/files/{station_id}/{file}">{file}</a></li>'
 
     html += "</ul>"
-
     html += '<p><a href="/dashboard">Back to Dashboard</a></p>'
 
     return html

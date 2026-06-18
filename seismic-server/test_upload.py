@@ -1,12 +1,11 @@
 import requests
 
-filename = "../data/DION_001_2026-06-08_16-15-20.csv"
+filename = "DION_001_test_station.mseed"
 
-with open(filename, "rb") as f:
-
+with open(filename, "rb") as file:
     response = requests.post(
         "http://127.0.0.1:5000/upload",
-        files={"file": f}
+        files={"file": file}
     )
 
 print(response.text)
