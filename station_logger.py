@@ -4,22 +4,49 @@ import time
 from datetime import datetime, timezone
 import shutil
 import json
+import sys
+import requests
+
 
 from config import (
-    SAMPLE_RATE,
-    STATION_ID,
     DATA_FOLDER,
     LOG_FILE_SECONDS,
     ONEDRIVE_UPLOAD_FOLDER,
     ENABLE_UPLOAD_SIMULATION,
-    STATION_LOCATION,
-    DATA_SOURCE_NAME,
-    USE_GPS_TIME,
-    METADATA_FILENAME
+    METADATA_FILENAME,
+    EVENT_THRESHOLD,
+    EVENT_LOG_FILE,
+    EVENT_COOLDOWN_SECONDS
 )
 
 from data_source import read_seismic_sample
 
+from event_detector import get_event_status
+
+SERVER_UPLOAD_URL = "http://127.0.0.1:5000/upload"
+
+def load_station_config(config_path):
+
+    with open(config_path, mode="r") as station_file:
+        return json.load(station_file)
+
+STATION_CONFIG_FILE = (
+    sys.argv[1]
+    if len(sys.argv) > 1
+    else "stations/dion_station.json"
+)
+
+station_config = load_station_config(STATION_CONFIG_FILE)
+
+print(f"Loaded station configuration: {STATION_CONFIG_FILE}")
+
+STATION_ID = station_config["station_id"]
+STATION_LOCATION = station_config["station_location"]
+SAMPLE_RATE = station_config["sample_rate"]
+USE_GPS_TIME = station_config["gps_enabled"]
+DATA_SOURCE_NAME = station_config["data_source"]
+
+last_logged_event_time = None
 
 # Create data folder
 
@@ -61,6 +88,22 @@ def upload_completed_file(log_filename):
 
     print(f"Copied completed file to {upload_path}")
 
+def upload_file_to_server(log_filename):
+    try:
+        with open(log_filename, "rb") as file:
+            response = requests.post(
+                SERVER_UPLOAD_URL,
+                files={"file": file}
+            )
+
+        if response.status_code == 200:
+            print(f"Uploaded to server: {log_filename}")
+        else:
+            print(f"Server upload failed: {response.text}")
+
+    except Exception as error:
+        print(f"Could not upload to server: {error}")
+
 # Create station metadata file
 
 def create_station_metadata():
@@ -87,6 +130,49 @@ def create_station_metadata():
 
     print(f"Station metadata saved to {metadata_path}")
 
+def write_event_summary(timestamp_utc, raw_value, event_status):
+
+    global last_logged_event_time
+
+    if event_status != "EVENT_DETECTED":
+        return
+
+    current_time = time.time()
+
+    if last_logged_event_time is not None:
+        time_since_last_event = current_time - last_logged_event_time
+
+        if time_since_last_event < EVENT_COOLDOWN_SECONDS:
+            return
+
+    last_logged_event_time = current_time
+
+    event_log_path = os.path.join(DATA_FOLDER, EVENT_LOG_FILE)
+
+    file_exists = os.path.exists(event_log_path)
+
+    with open(event_log_path, mode="a", newline="") as event_file:
+
+        event_writer = csv.writer(event_file)
+
+        if not file_exists:
+            event_writer.writerow([
+                "timestamp_utc",
+                "station_id",
+                "station_location",
+                "raw_value",
+                "event_status",
+                "data_source"
+            ])
+
+        event_writer.writerow([
+            timestamp_utc,
+            STATION_ID,
+            STATION_LOCATION,
+            raw_value,
+            event_status,
+            DATA_SOURCE_NAME
+        ])
 
 # Main logging function
 
@@ -119,7 +205,8 @@ def run_station_logger():
                     "station_id",
                     "sample_index",
                     "raw_value",
-                    "source"
+                    "source",
+                    "event_status"
                     
                 ])
 
@@ -131,12 +218,17 @@ def run_station_logger():
 
                     raw_value = read_seismic_sample(current_time)
 
+                    event_status = get_event_status(raw_value, EVENT_THRESHOLD)
+
+                    write_event_summary(timestamp_utc, raw_value, event_status)
+
                     csv_writer.writerow([
                         timestamp_utc,
                         STATION_ID,
                         sample_index,
                         raw_value,
-                        "SIMULATED"
+                        DATA_SOURCE_NAME,
+                        event_status
 
                     ])
 
@@ -146,7 +238,10 @@ def run_station_logger():
 
                     time.sleep(sample_interval)
 
-            upload_completed_file(log_filename)        
+            upload_completed_file(log_filename)
+            upload_file_to_server(log_filename)
+
+               
 
     except KeyboardInterrupt:
 

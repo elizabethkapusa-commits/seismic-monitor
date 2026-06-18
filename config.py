@@ -2,7 +2,7 @@
 
 SAMPLE_RATE = 100                 # samples per second
 WINDOW_SECONDS = 10               # graph window size
-EVENT_THRESHOLD = 1.2            # event detection threshold
+EVENT_THRESHOLD = 2.0           # event detection threshold
 
 # Signal settings
 
@@ -63,3 +63,4 @@ METADATA_FILENAME = "station_metadata.json"
 
 ONEDRIVE_UPLOAD_FOLDER = "onedrive_uploads"
 ENABLE_UPLOAD_SIMULATION = True
+EVENT_LOG_FILE = "event_log.csv"

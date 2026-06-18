@@ -1,0 +1,7 @@
+{
+    "station_id": "SENG_001",
+    "station_location": "SENG Building",
+    "sample_rate": 100,
+    "gps_enabled": false,
+    "data_source": "SIMULATED"
+}

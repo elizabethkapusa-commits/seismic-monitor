@@ -1,0 +1,7 @@
+{
+    "station_id": "DION_002",
+    "station_location": "DION Building",
+    "sample_rate": 100,
+    "gps_enabled": false,
+    "data_source": "SIMULATED"
+}
