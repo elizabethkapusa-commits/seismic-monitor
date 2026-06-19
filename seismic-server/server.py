@@ -1,9 +1,12 @@
-from flask import Flask, request, send_from_directory
+from flask import Flask, request, send_from_directory, Response
 import os
 import csv
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from obspy import read
+import io
+
 
 app = Flask(__name__)
 
@@ -28,12 +31,24 @@ def get_file_stats(station_id, filename):
     filepath = os.path.join(UPLOAD_FOLDER, station_id, filename)
 
     if filename.lower().endswith((".mseed", ".miniseed")):
-        return {
-            "sample_count": "MiniSEED file",
-            "last_timestamp": "Use ObsPy/MATLAB",
-            "last_value": "N/A",
-            "last_status": "Archived"
-        }
+        try:
+            stream = read(filepath)
+            trace = stream[0]
+
+            return {
+                "sample_count": trace.stats.npts,
+                "last_timestamp": f"{trace.stats.starttime} to {trace.stats.endtime}",
+                "last_value": "MiniSEED binary",
+                "last_status": f"Archived, {trace.stats.sampling_rate} Hz"
+            }
+
+        except Exception as error:
+            return {
+                "sample_count": "MiniSEED read error",
+                "last_timestamp": str(error),
+                "last_value": "N/A",
+                "last_status": "Error"
+            }
 
     sample_count = 0
     last_timestamp = "N/A"
@@ -100,18 +115,19 @@ def upload_file():
     return f"Uploaded {file.filename} to {station_id}", 200
 
 
-# ADD THIS NEW ROUTE HERE
 @app.route("/files")
 def list_files():
 
-    files = os.listdir(UPLOAD_FOLDER)
+    html = "<h1>Uploaded Station Folders</h1><ul>"
 
-    html = "<h1>Uploaded Files</h1><ul>"
+    for station_id in sorted(os.listdir(UPLOAD_FOLDER)):
+        station_path = os.path.join(UPLOAD_FOLDER, station_id)
 
-    for file in files:
-        html += f'<li><a href="/files/{file}">{file}</a></li>'
+        if os.path.isdir(station_path):
+            html += f'<li><a href="/station/{station_id}">{station_id}</a></li>'
 
     html += "</ul>"
+    html += '<p><a href="/dashboard">Back to Dashboard</a></p>'
 
     return html
 
@@ -124,7 +140,7 @@ def view_file(station_id, filename):
 @app.route("/dashboard")
 def dashboard():
 
-    html = "<h1>Seismic Monitoring Dashboard</h1>"
+    html = "<h1>Seismic Monitoring Server Dashboard</h1>"
 
     for station_id in sorted(os.listdir(UPLOAD_FOLDER)):
 
@@ -183,7 +199,14 @@ def station_files(station_id):
     html = f"<h1>{station_id} Files</h1><ul>"
 
     for file in files:
-        html += f'<li><a href="/files/{station_id}/{file}">{file}</a></li>'
+        html += f'<li>{file} '
+
+        html += f'<a href="/files/{station_id}/{file}">[Download File]</a>'
+
+        if file.lower().endswith((".mseed", ".miniseed")):
+            html += f' <a href="/waveform/{station_id}/{file}">[View Waveform]</a>'
+
+        html += '</li>'
 
     html += "</ul>"
     html += '<p><a href="/dashboard">Back to Dashboard</a></p>'
@@ -237,6 +260,29 @@ def station_plot(station_id):
     """
 
     return html
+
+@app.route("/waveform/<station_id>/<filename>")
+def view_waveform(station_id, filename):
+
+    filepath = os.path.join(UPLOAD_FOLDER, station_id, filename)
+
+    if not filename.lower().endswith((".mseed", ".miniseed")):
+        return "Waveform preview is only available for MiniSEED files."
+
+    try:
+        stream = read(filepath)
+        trace = stream[0]
+
+        fig = trace.plot(show=False)
+
+        image = io.BytesIO()
+        fig.savefig(image, format="png")
+        image.seek(0)
+
+        return Response(image.getvalue(), mimetype="image/png")
+
+    except Exception as error:
+        return f"Could not create waveform preview: {error}"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
